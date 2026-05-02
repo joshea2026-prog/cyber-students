@@ -3,6 +3,7 @@ from tornado.escape import json_decode
 from uuid import uuid4
 
 from .base import BaseHandler
+from .crypto_utils import verify_password, hash_token
 
 class LoginHandler(BaseHandler):
 
@@ -10,18 +11,19 @@ class LoginHandler(BaseHandler):
         token_uuid = uuid4().hex
         expires_in = (datetime.now(timezone.utc) + timedelta(hours=2)).timestamp()
 
-        token = {
-            'token': token_uuid,
-            'expiresIn': expires_in,
-        }
-
         await self.db.users.update_one({
             'email': email
         }, {
-            '$set': token
+            '$set': {
+                'token': hash_token(token_uuid),  # Store ENCRYPTED
+                'expiresIn': expires_in
+            }
         })
 
-        return token
+        return {
+            'token': token_uuid,  # Return PLAINTEXT to client
+            'expiresIn': expires_in
+        }
 
     async def post(self):
         try:
@@ -41,16 +43,12 @@ class LoginHandler(BaseHandler):
             return
 
         user = await self.db.users.find_one({
-          'email': email
+            'email': email
         }, {
-          'password': 1
+            'password': 1
         })
-
-        if user is None:
-            self.send_error(403, message='The email address and password are invalid!')
-            return
-
-        if user['password'] != password:
+        
+        if user is None or not verify_password(password, user['password']):
             self.send_error(403, message='The email address and password are invalid!')
             return
 
